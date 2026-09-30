@@ -43,7 +43,7 @@ class QueueHandler(logging.Handler):
             pass
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger("Luffy-Gateway")
+logger = logging.getLogger("Mango-Gateway")
 
 q_handler = QueueHandler()
 q_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
@@ -51,88 +51,7 @@ logger.addHandler(q_handler)
 logging.getLogger("uvicorn.error").addHandler(q_handler)
 logging.getLogger("uvicorn.access").addHandler(q_handler)
 
-app = FastAPI(title="Luffy Panel", docs_url=None, redoc_url=None)
-
-# Bump this on every release so the dashboard can notify already-open sessions
-# that a new version is available / was just applied.
-PANEL_VERSION = "1.1.0"
-
-# GitHub repo checked for update notifications
-GITHUB_REPO = "luffy-sh-op/LUFFY_PANEL"
-
-async def check_github_latest(force: bool = False) -> dict:
-    """Fetches the latest release tag from GitHub, caches in SQLite.
-    Only actually calls the API if force=True or no cached data exists."""
-    conn = get_db()
-    try:
-        cur = conn.execute("SELECT latest_tag, latest_url, checked_at FROM github_cache WHERE id = 1")
-        row = cur.fetchone()
-    finally:
-        conn.close()
-
-    now = time.time()
-    cached_tag = row["latest_tag"] if row else None
-    cached_url = row["latest_url"] if row else None
-    cached_at = row["checked_at"] if row else 0
-
-    if not force and cached_tag and (now - cached_at) < 60:
-        return {"tag": cached_tag, "url": cached_url, "checked_at": cached_at}
-
-    global http_client
-    if http_client is None:
-        return {"tag": cached_tag, "url": cached_url, "checked_at": cached_at}
-
-    new_tag = cached_tag
-    new_url = cached_url
-    try:
-        r = await http_client.get(
-            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
-            headers={"Accept": "application/vnd.github+json"},
-        )
-        if r.status_code == 200:
-            data = r.json()
-            new_tag = data.get("tag_name") or data.get("name")
-            new_url = data.get("html_url")
-        else:
-            r2 = await http_client.get(f"https://api.github.com/repos/{GITHUB_REPO}/commits/main")
-            if r2.status_code == 200:
-                data2 = r2.json()
-                sha = data2.get("sha") or ""
-                new_tag = sha[:7] if sha else cached_tag
-                new_url = f"https://github.com/{GITHUB_REPO}/commit/{sha}" if sha else cached_url
-    except Exception as e:
-        logger.warning(f"GitHub version check failed: {e}")
-
-    conn = get_db()
-    try:
-        conn.execute("INSERT OR REPLACE INTO github_cache (id, latest_tag, latest_url, checked_at) VALUES (1, ?, ?, ?)",
-                     (new_tag, new_url, now))
-        conn.commit()
-    finally:
-        conn.close()
-
-    # Create notification if a new version is detected
-    if new_tag and new_tag != cached_tag and cached_tag:
-        await create_notification(
-            type="update",
-            title=f"New version: {new_tag}",
-            message=f"Panel version {cached_tag} → {new_tag} is available on GitHub.",
-            link=new_url,
-        )
-
-    return {"tag": new_tag, "url": new_url, "checked_at": now}
-
-
-async def github_check_loop():
-    """Background task: check GitHub every 60 seconds for new releases."""
-    await asyncio.sleep(10)  # initial delay
-    while True:
-        try:
-            await check_github_latest(force=True)
-        except Exception as e:
-            logger.warning(f"GitHub periodic check error: {e}")
-        await asyncio.sleep(60)
-
+app = FastAPI(title="Mango Panel", docs_url=None, redoc_url=None)
 
 # ── Notifications ────────────────────────────────────────────────────────
 
@@ -371,7 +290,7 @@ BOT_I18N = {
         "btn_create": "➕ Create User",
         "btn_addip": "🌐 Add Clean IP",
         "btn_lang": "فارسی",
-        "welcome": "👑 <b>Welcome to Luffy Panel Telegram Bot!</b>\nManage your VLESS inbounds directly from your Telegram.",
+        "welcome": "👑 <b>Welcome to Mango Panel Telegram Bot!</b>\nManage your VLESS inbounds directly from your Telegram.",
         "lang_switched": "🌐 Language switched to <b>English</b>.",
         "stats": (
             "<b>📊 Server Status Dashboard</b>\n\n"
@@ -607,12 +526,6 @@ def init_db():
             link TEXT,
             seen INTEGER DEFAULT 0,
             created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS github_cache (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            latest_tag TEXT,
-            latest_url TEXT,
-            checked_at REAL
         );
     """)
     conn.commit()
@@ -851,7 +764,6 @@ async def startup():
     timeout = httpx.Timeout(30.0, connect=10.0)
     http_client = httpx.AsyncClient(limits=limits, timeout=timeout, follow_redirects=True)
     asyncio.create_task(keep_alive())
-    asyncio.create_task(github_check_loop())
     await restart_telegram_bot()
     asyncio.create_task(telegram_notifier_cron())
     await ensure_default_link()
@@ -871,7 +783,7 @@ def get_domain() -> str:
 
 def generate_vless_link(
     uuid: str,
-    remark: str = "Luffy",
+    remark: str = "Mango",
     address: str = None,
     port: int = None,
     protocol: str = DEFAULT_PROTOCOL,
@@ -935,7 +847,7 @@ def link_for_variant(link: dict, uid: str, auth: str, address: str = None) -> st
     protocol = f"{auth}-{variant['transport']}"
     return generate_vless_link(
         uid,
-        remark=f"Luffy-{link.get('label', '')}",
+        remark=f"Mango-{link.get('label', '')}",
         address=address,
         protocol=protocol,
         fingerprint=variant.get("fingerprint"),
@@ -1545,19 +1457,6 @@ async def api_me(request: Request):
     token = request.cookies.get(SESSION_COOKIE)
     return {"authenticated": await is_valid_session(token)}
 
-@app.get("/api/version")
-async def api_version():
-    gh = await check_github_latest()
-    latest = gh.get("tag")
-    current = PANEL_VERSION.lstrip("vV")
-    update_available = bool(latest) and latest.lstrip("vV") != current
-    return {
-        "version": PANEL_VERSION,
-        "latest_github_version": latest,
-        "update_available": update_available,
-        "github_url": gh.get("url") or f"https://github.com/{GITHUB_REPO}/releases",
-    }
-
 @app.post("/api/change-password")
 async def api_change_password(request: Request, _=Depends(require_auth)):
     body = await request.json()
@@ -2135,7 +2034,7 @@ def generate_landing_page(link: dict, uid: str, addresses: list[str]) -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Luffy - {link['label']}</title>
+    <title>Mango - {link['label']}</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
     <style>
         *{{margin:0;padding:0;box-sizing:border-box}}
@@ -2328,7 +2227,7 @@ def generate_landing_page(link: dict, uid: str, addresses: list[str]) -> str:
             box-shadow:var(--gold-glow)}}
         .toast.show{{opacity:1;transform:translateX(-50%) translateY(0)}}
 
-        /* Luffy footer links */
+        /* Mango footer links */
         .footer-links{{display:flex;justify-content:center;gap:16px;padding:20px 0 10px}}
         .footer-link{{display:flex;align-items:center;gap:5px;color:var(--text3);
             font-size:11px;font-weight:600;text-decoration:none;transition:color .2s}}
@@ -2354,7 +2253,7 @@ def generate_landing_page(link: dict, uid: str, addresses: list[str]) -> str:
                 <ellipse cx="42" cy="17" rx="23" ry="5.5" fill="#C8900A" stroke="#FFD700" stroke-width="1"/>
                 <path d="M20 45 Q21.5 41.5 42 39.5 Q62.5 41.5 64 45" fill="none" stroke="#CC2200" stroke-width="4.5" stroke-linecap="round" opacity=".92"/>
             </svg>
-            <span class="header-title">LUFFY</span>
+            <span class="header-title">MANGO</span>
         </div>
         <div class="header-sub">{link['label']} · Connection Status</div>
     </div>
@@ -2436,7 +2335,7 @@ def generate_landing_page(link: dict, uid: str, addresses: list[str]) -> str:
 
     <!-- Footer links -->
     <div class="footer-links">
-        <a href="https://t.me/Luffy_sh_op" target="_blank" class="footer-link">
+        <a href="https://t.me/Mango_sh_op" target="_blank" class="footer-link">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.248l-2.032 9.57c-.148.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.895.651z"/></svg>
             Telegram Channel
         </a>
@@ -2444,7 +2343,7 @@ def generate_landing_page(link: dict, uid: str, addresses: list[str]) -> str:
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.248l-2.032 9.57c-.148.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.895.651z"/></svg>
             Chef
         </a>
-        <a href="https://github.com/luffy-sh-op/LUFFY_PANEL/tree/main" target="_blank" class="footer-link">
+        <a href="https://github.com/mango-sh-op/MANGO_PANEL/tree/main" target="_blank" class="footer-link">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/></svg>
             GitHub
         </a>
@@ -2481,7 +2380,7 @@ def generate_landing_page(link: dict, uid: str, addresses: list[str]) -> str:
     // The #name fragment is what Hiddify shows as the profile name before
     // it even fetches the sublink, and is used as a fallback if the
     // content's own #profile-title header is missing or fails to parse.
-    const hiddifyProfileName = encodeURIComponent("Luffy-{link['label']}");
+    const hiddifyProfileName = encodeURIComponent("Mango-{link['label']}");
     const hiddifyImportUrl = "hiddify://import/" + subUrl + "#" + hiddifyProfileName;
 
     // Returns URL to the PNG icon for the given app name.
@@ -2679,7 +2578,7 @@ def generate_landing_page(link: dict, uid: str, addresses: list[str]) -> str:
     function downloadQR() {{
         const a = document.createElement('a');
         a.href = document.getElementById('qr-modal-img').src;
-        a.download = 'luffy-config-qr.png';
+        a.download = 'mango-config-qr.png';
         a.click();
     }}
 
@@ -2793,10 +2692,10 @@ def generate_singbox_config(link: dict, uid: str, addresses: list[str]) -> str:
             },
         }
 
-    tags = [f"Luffy-{link['label']}"]
+    tags = [f"Mango-{link['label']}"]
     outbounds = [_vless_outbound(tags[0], domain)]
     for i, addr in enumerate(addresses):
-        tag = f"Luffy-{link['label']}-IP{i+1}"
+        tag = f"Mango-{link['label']}-IP{i+1}"
         tags.append(tag)
         outbounds.append(_vless_outbound(tag, addr))
 
@@ -2861,11 +2760,11 @@ def generate_clash_config(link: dict, uid: str, addresses: list[str]) -> str:
     for auth in active_auths:
         fp = variants[auth]["fingerprint"]
         suffix = "" if len(active_auths) == 1 else f"-{auth.upper()}"
-        name0 = f"Luffy-{link['label']}{suffix}"
+        name0 = f"Mango-{link['label']}{suffix}"
         proxies.append(_proxy_entry(auth, fp, name0, domain))
         proxy_name_list.append(name0)
         for i, addr in enumerate(addresses):
-            name_i = f"Luffy-{link['label']}{suffix}-IP{i+1}"
+            name_i = f"Mango-{link['label']}{suffix}-IP{i+1}"
             proxies.append(_proxy_entry(auth, fp, name_i, addr))
             proxy_name_list.append(name_i)
 
@@ -2873,7 +2772,7 @@ def generate_clash_config(link: dict, uid: str, addresses: list[str]) -> str:
     proxy_names = "\n".join(f'      - "{p}"' for p in proxy_name_list)
 
     return (
-        f"# Luffy Panel - {link['label']}\n"
+        f"# Mango Panel - {link['label']}\n"
         f"# {usage_str} | {expiry_str}\n"
         f"port: 7890\n"
         f"socks-port: 7891\n"
@@ -2979,7 +2878,7 @@ async def subscription_endpoint(uid: str, request: Request):
     headers = {
         "Content-Type": "text/plain; charset=utf-8",
         "profile-update-interval": "6",
-        "profile-title": "base64:" + base64.b64encode(f"Luffy-{link['label']}".encode()).decode(),
+        "profile-title": "base64:" + base64.b64encode(f"Mango-{link['label']}".encode()).decode(),
         "subscription-userinfo": f"upload={link['used_bytes']}; download=0; total={total_bytes}; expire={expire_ts}",
     }
 
@@ -3357,7 +3256,7 @@ PANEL_HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Luffy Panel</title>
+<title>Mango Panel</title>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Inter:wght@300;400;500;600;700&family=Vazirmatn:wght@400;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <style>
@@ -3595,7 +3494,6 @@ body[dir="rtl"]{direction:rtl;text-align:right}
 .notif-item:hover{background:var(--surface3)}
 .notif-item.unseen{background:var(--gold-dim)}
 .notif-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:18px}
-.notif-icon.update{background:rgba(56,189,248,.12);color:#38bdf8}
 .notif-icon.quota{background:var(--red-dim);color:var(--red)}
 .notif-icon.expiry{background:rgba(251,191,36,.12);color:var(--yellow)}
 .notif-icon.info{background:rgba(74,222,128,.12);color:var(--green)}
@@ -3675,7 +3573,7 @@ body[dir="rtl"]{direction:rtl;text-align:right}
           <ellipse cx="42" cy="17" rx="23" ry="5.5" fill="#C8900A" stroke="#FFD700" stroke-width="1"/>
           <path d="M20 45 Q21.5 41.5 42 39.5 Q62.5 41.5 64 45" fill="none" stroke="#CC2200" stroke-width="4.5" stroke-linecap="round" opacity=".92"/>
         </svg>
-        <div class="login-title">LUFFY PANEL</div>
+        <div class="login-title">MANGO PANEL</div>
         <div class="login-sub">Enter your password to continue</div>
       </div>
       <div class="fg">
@@ -3700,25 +3598,25 @@ body[dir="rtl"]{direction:rtl;text-align:right}
         <button class="lang-btn lang-fa" onclick="setLang('fa')">FA</button>
       </div>
       <div class="mob-social">
-        <a href="https://t.me/Luffy_sh_op" target="_blank" class="sb-social-btn" title="Telegram Channel">
+        <a href="https://t.me/Mango_sh_op" target="_blank" class="sb-social-btn" title="Telegram Channel">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.248l-2.032 9.57c-.148.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.895.651z"/></svg>
         </a>
-        <a href="https://github.com/luffy-sh-op/LUFFY_PANEL/tree/main" target="_blank" class="sb-social-btn" title="GitHub">
+        <a href="https://github.com/mango-sh-op/MANGO_PANEL/tree/main" target="_blank" class="sb-social-btn" title="GitHub">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/></svg>
         </a>
       </div>
     </div>
-    <span style="font-family:'Cinzel',serif;font-size:16px;font-weight:700;color:var(--gold);letter-spacing:2px">LUFFY</span>
+    <span style="font-family:'Cinzel',serif;font-size:16px;font-weight:700;color:var(--gold);letter-spacing:2px">MANGO</span>
   </div>
 
   <!-- SIDEBAR -->
   <aside class="sidebar" id="sb">
-    <!-- Telegram & GitHub links (above the LUFFY logo) -->
+    <!-- Telegram & GitHub links (above the MANGO logo) -->
     <div class="sb-social" style="padding:10px 8px 0">
-      <a href="https://t.me/Luffy_sh_op" target="_blank" class="sb-social-btn" title="Telegram Channel">
+      <a href="https://t.me/Mango_sh_op" target="_blank" class="sb-social-btn" title="Telegram Channel">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.248l-2.032 9.57c-.148.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.895.651z"/></svg>
       </a>
-      <a href="https://github.com/luffy-sh-op/LUFFY_PANEL/tree/main" target="_blank" class="sb-social-btn" title="GitHub">
+      <a href="https://github.com/mango-sh-op/MANGO_PANEL/tree/main" target="_blank" class="sb-social-btn" title="GitHub">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/></svg>
       </a>
     </div>
@@ -3733,7 +3631,7 @@ body[dir="rtl"]{direction:rtl;text-align:right}
           <ellipse cx="35" cy="24" rx="5" ry="3" fill="rgba(255,255,255,.1)" transform="rotate(-20 35 24)"/>
         </svg>
       </div>
-      <div class="sb-title">LUFFY</div>
+      <div class="sb-title">MANGO</div>
     </div>
     <nav class="sb-nav">
       <button class="nav-item active" data-page="dashboard">
@@ -4611,7 +4509,7 @@ function showQR(txt){
 
 function dlQR(){
   const a=document.createElement('a');
-  a.href=$m('qr-img').src;a.download='luffy-qr.png';a.click();
+  a.href=$m('qr-img').src;a.download='mango-qr.png';a.click();
 }
 
 async function loadSettings(){
@@ -4862,7 +4760,7 @@ function renderAddrs(){
 function showAddAddrMo(){$m('na').value='';$m('mo-addr').classList.add('show')}
 
 // ── Notifications ────────────────────────────────────────────────────────
-const NOTIF_ICONS = {update:'🔔',quota:'⚠️',expiry:'⏰',info:'ℹ️'};
+const NOTIF_ICONS = {quota:'⚠️',expiry:'⏰',info:'ℹ️'};
 
 async function loadNotifs(){
   try{
@@ -4986,41 +4884,6 @@ function startPolling(){
   statsInterval=setInterval(()=>{if(isAuthenticated){loadStats();loadLinks();updateNotifBadge()}},12000);
 }
 startPolling();
-
-// ── Panel update notifications (checks GitHub for new releases) ────────
-const PANEL_VERSION_KEY='luffy_panel_last_version';
-const PANEL_GH_NOTIFIED_KEY='luffy_panel_last_notified_gh';
-let loadedPanelVersion=null;
-
-async function checkPanelVersion(isPeriodic){
-  try{
-    const r=await fetch('/api/version');
-    if(!r.ok)return;
-    const d=await r.json();
-    const serverVersion=d.version;
-
-    // Detect that this panel instance was updated since the last time we visited
-    if(!loadedPanelVersion){
-      loadedPanelVersion=serverVersion;
-      const lastSeen=localStorage.getItem(PANEL_VERSION_KEY);
-      if(lastSeen&&lastSeen!==serverVersion){
-        toast('✅ Panel updated successfully to v'+serverVersion);
-      }
-      localStorage.setItem(PANEL_VERSION_KEY,serverVersion);
-    }
-
-    // Detect that GitHub has a newer release than what's currently running
-    if(d.update_available&&d.latest_github_version){
-      const alreadyNotified=localStorage.getItem(PANEL_GH_NOTIFIED_KEY);
-      if(alreadyNotified!==d.latest_github_version){
-        toast('🚀 New version available on GitHub: '+d.latest_github_version+' - pull the latest update');
-        localStorage.setItem(PANEL_GH_NOTIFIED_KEY,d.latest_github_version);
-      }
-    }
-  }catch(e){}
-}
-checkPanelVersion(false);
-setInterval(()=>checkPanelVersion(true),5*60*1000);
 </script>
 </body>
 </html>"""
